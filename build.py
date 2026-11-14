@@ -1,4 +1,4 @@
-import importlib.util, glob, os, json, html, sys
+import importlib.util, glob, os, json, html, sys, math
 sys.path.insert(0,"content")
 open('assets/demos.js','w').write(''.join(open(f).read() for f in ['assets/bio.js']+sorted(glob.glob('demos_src/*.js'))))
 DEMOS={
@@ -76,15 +76,136 @@ window.addEventListener('load',function(){{if(!window.renderMathInElement){{docu
 <script src="../../assets/nav.js"></script></body></html>'''
 for t in TOPICS:
     os.makedirs(f'topics/{t["slug"]}',exist_ok=True); open(f'topics/{t["slug"]}/index.html','w').write(page(t))
-lis=''.join(f'<li><a href="topics/{t["slug"]}/"><span class="n">{t["n"]} · {t["area"]}</span><b>{t["zh"]}</b><small>{t["ja"]} · {(str(len(t["problems"]))+" 题") if t["problems"] else t.get("sub","常用数据速查")}{(" · 过去问 "+str(t["bank"]["n"])+" 题 "+t["bank"]["stars"]) if t.get("bank") else ""}</small></a></li>' for t in TOPICS)
-RANKTBL=''.join(f'<tr><td><a href="topics/{t["slug"]}/">{t["n"]} {t["zh"]}</a></td><td>{" ".join(t["bank"]["codes"])}</td><td style="text-align:right">{t["bank"]["n"]}</td><td>{t["bank"]["stars"]}</td></tr>' for t in sorted([t for t in TOPICS if t.get('bank')],key=lambda t:-t['bank']['n']))
+# HOME：首页目次（像书的目录：左侧章号，右侧章名与专题，点线引到右侧的题数・过去问・星级）；目次下是知识导图（homemap.py 生成的内联 SVG），
+# 之后「附」列资料与工具，「表」是过去问频度表。样式在 site.css 末尾「生物站首页目次」块，只作用于 body.contents / #map
+# 各专题的 area 几乎一题一个分野，目次按讲义常见的六章合并（只在这里分组，不改专题自己的 area）
+CHAPTERS = [  # 章名、日文名、导图上的短名、提要、所含专题
+ ('细胞与代谢', '細胞と代謝', '细胞代谢', '原核细胞与真核细胞、细胞器与生体物质；酶与 ATP，呼吸、发酵与光合作用。', ['cell', 'metabolism']),
+ ('遗传信息', '遺伝情報', '遗传信息', 'DNA 的结构与复制、转录与翻译、基因表达调控；细胞周期、体细胞分裂与减数分裂。', ['dna', 'division']),
+ ('生殖与遗传', '生殖と遺伝', '生殖遗传', '有性生殖与配子形成、受精与发生、细胞分化；孟德尔定律、连锁与交换的比例计算。', ['development', 'genetics']),
+ ('动物的反应与体内环境', '動物の反応と体内環境', '动物反应', '感受器、神经与肌肉；体液与肾脏、自主神经与激素的调节；先天免疫与获得免疫。', ['nerve', 'homeostasis', 'immunity']),
+ ('植物的环境应答', '植物の環境応答', '植物', '植物激素与向性、光敏色素与光周期性、开花与种子萌发。', ['plant']),
+ ('生态与进化', '生態と進化', '生态进化', '种群与群落、生态系统的物质循环与能量流动；进化的机制、哈迪–温伯格定律与系统分类。', ['ecology', 'evolution']),
+]
+def _stars(s): return f'<span class="stars" aria-label="重要度 {len(s)}/3">{s}</span>'
+def _entry(t, label=None, meta=None):
+    if meta is None:
+        meta = (f'{len(t["problems"])} 题' if t['problems'] else t.get('sub', '常用数据速查')) + (f'<span class="ct-sep"> · </span>过去问 {t["bank"]["n"]} {_stars(t["bank"]["stars"])}' if t.get('bank') else '')
+    return (f'<li><a href="topics/{t["slug"]}/"><span class="ct-n">{t["n"]:02d}</span><span class="ct-t"><span class="ct-zh">{label or t["zh"]}</span>'
+            f'<span class="ct-ja" lang="ja">{t["ja"]}</span></span><span class="ct-dots" aria-hidden="true"></span><span class="ct-m">{meta}</span></a></li>')
+_BY = {t['slug']: t for t in TOPICS}
+_parts = []
+for k, (name, ja, _, intro, slugs) in enumerate(CHAPTERS, 1):
+    ts = [_BY[s] for s in slugs]
+    nb = sum(t['bank']['n'] for t in ts if t.get('bank'))
+    _parts.append(f'<li class="ct-part"><p class="ct-no" aria-hidden="true">{k}</p><div class="ct-body">'
+                  f'<h3 id="ch-{k}"><span class="ct-vh">第 {k} 章　</span>{name}<span class="ct-chja" lang="ja">{ja}</span></h3>'
+                  f'<p class="ct-intro">{intro}<span class="ct-sum">{len(ts)} 个专题 · 过去问 {nb} 题</span></p>'
+                  f'<ol class="ct-list">{"".join(_entry(t) for t in ts)}</ol></div></li>')
+_D = next(t for t in TOPICS if t['slug'] == 'demos')
+_CH_SLUGS = {s for c in CHAPTERS for s in c[4]}
+assert _CH_SLUGS == {t['slug'] for t in TOPICS if t['problems']}, '目次分组要覆盖全部讲解专题'
+_appx = ''.join(_entry(t, f'互动演示总览（{t["demo_count"]} 个）', '全部演示一览') if t['slug'] == 'demos' else _entry(t)
+                for t in TOPICS if t['slug'] not in _CH_SLUGS)
+# MAP：知识导图。每章一色（site.css 的 --mp-1…--mp-6），一幅线描插图；每个专题一条代表式（取自本专题页抬头的式子、14_formulas 或讲解正文），
+# 记法见 homemap.fml：` 包起来的部分直立（化学式、碱基、细胞周期各期），其余拉丁字母为斜体（变量、基因符号）
+XLINKS = [  # (slug, slug, 标签)
+ ('cell', 'metabolism', '细胞器'), ('dna', 'division', 'DNA 复制'), ('dna', 'genetics', '基因与性状'), ('development', 'genetics', '配子形成'),
+ ('nerve', 'homeostasis', '自主神经'), ('homeostasis', 'immunity', '体内环境'), ('metabolism', 'plant', '光合作用'), ('ecology', 'evolution', '自然选择'),
+]
+MAPF = {
+ 'cell': '`H_2O` ≈ 70%',                        # 01_cell 抬头：细胞中水约占 70%
+ 'metabolism': '`RQ = CO_2/O_2`',               # 02_metabolism 抬头 / 14_formulas：呼吸商
+ 'dna': '`A = T, G = C`',                       # 03_dna 抬头 / 14_formulas：沙加夫法则
+ 'division': '`G_1 → S → G_2 → M`',             # 04_division 抬头：细胞周期
+ 'development': '细胞数 = 2^n',                  # 14_formulas：卵裂
+ 'genetics': 'AaBb × AaBb → 9:3:3:1',           # 06_genetics 抬头 / 14_formulas：独立定律
+ 'nerve': 'v = Δx/Δt',                          # 07_nerve 抬头 / 14_formulas：传导速度
+ 'homeostasis': '浓缩率 = 尿中浓度/血浆中浓度',    # 08_homeostasis 抬头 / 14_formulas
+ 'immunity': '抗原 + 抗体 → 抗原抗体反应',         # 09_immunity 抬头
+ 'plant': '生长素 → 背光侧',                      # 10_plant 抬头与讲解：单侧光照时生长素移向背光侧
+ 'ecology': 'N = M × n/m',                      # 14_formulas：标志重捕法
+ 'evolution': 'p^2 + 2pq + q^2 = 1',            # 12_evolution 抬头 / 14_formulas：哈迪–温伯格定律
+}
+MAPL = {'division': '细胞周期与分裂', 'nerve': '感受器・神经', 'ecology': '种群・生态系统'}
+from homemap import ico, render
+def _icon_cell(x, y, s):  # 细胞切面：细胞膜、细胞核与核仁、一个线粒体（内膜折成嵴）、几粒核糖体
+    return ico(x, y, s, lambda P, R: f'<path d="M{P(.08, .5)}C{P(.08, .16)} {P(.92, .12)} {P(.92, .48)}C{P(.92, .86)} {P(.08, .86)} {P(.08, .5)}Z"/>'
+               f'<circle cx="{x + .38 * s:.1f}" cy="{y + .46 * s:.1f}" r="{R(.15)}"/><circle class="mp-dot" cx="{x + .41 * s:.1f}" cy="{y + .43 * s:.1f}" r="{R(.04)}"/>'
+               f'<path d="M{P(.58, .62)}C{P(.58, .54)} {P(.82, .54)} {P(.82, .62)}C{P(.82, .7)} {P(.58, .7)} {P(.58, .62)}Z"/>'
+               f'<path class="mp-thin" d="M{P(.61, .62)}L{P(.65, .58)}L{P(.68, .66)}L{P(.72, .58)}L{P(.75, .66)}L{P(.79, .61)}"/>'
+               + ''.join(f'<circle class="mp-dot" cx="{x + u * s:.1f}" cy="{y + v * s:.1f}" r="{R(.018)}"/>' for u, v in ((.62, .34), (.7, .4), (.24, .7), (.5, .74), (.78, .45))))
+def _icon_helix(x, y, s):  # DNA 双螺旋：两条相位差半周的链 + 碱基对横档
+    N = 48; A = .2
+    def strand(ph): return f'M{P_(.5 + A * math.sin(ph), .04)}' + ''.join(f'L{P_(.5 + A * math.sin(ph + 2 * math.pi * 1.5 * i / N), .04 + .92 * i / N)}' for i in range(1, N + 1))
+    P_ = lambda u, v: f'{x + u * s:.1f} {y + v * s:.1f}'
+    rungs = ''.join(f'M{P_(.5 + A * math.sin(2 * math.pi * 1.5 * i / 12), .04 + .92 * i / 12)}L{P_(.5 + A * math.sin(math.pi + 2 * math.pi * 1.5 * i / 12), .04 + .92 * i / 12)}' for i in range(1, 12) if abs(math.sin(2 * math.pi * 1.5 * i / 12)) > .3)
+    return ico(x, y, s, lambda P, R: f'<path d="{strand(0)}"/><path d="{strand(math.pi)}"/><path class="mp-thin" d="{rungs}"/>')
+def _icon_punnett(x, y, s):  # 孟德尔杂交的棋盘格：亲本配子 A・a 作表头，2×2 格里是子代基因型
+    g = [.3, .6, .9]
+    return ico(x, y, s, lambda P, R: f'<path d="M{P(.3, .3)}H{x + .9 * s:.1f}V{y + .9 * s:.1f}H{x + .3 * s:.1f}Z"/><path class="mp-thin" d="M{P(.6, .3)}V{y + .9 * s:.1f}M{P(.3, .6)}H{x + .9 * s:.1f}M{P(.06, .3)}H{x + .3 * s:.1f}M{P(.3, .06)}V{y + .3 * s:.1f}"/>'
+               + ''.join(f'<text class="mp-it" x="{x + u * s:.1f}" y="{y + v * s:.1f}" text-anchor="middle">{t}</text>' for u, v, t in ((.45, .22, 'A'), (.75, .22, 'a'), (.17, .5, 'A'), (.17, .8, 'a')))
+               + ''.join(f'<circle class="{"mp-dot" if (i, j) != (1, 1) else "mp-ion"}" cx="{x + (.45 + .3 * i) * s:.1f}" cy="{y + (.45 + .3 * j) * s:.1f}" r="{R(.05)}"/>' for i in (0, 1) for j in (0, 1)))
+def _icon_neuron(x, y, s):  # 神经元：细胞体与树突、带髓鞘的轴突、末梢分支
+    return ico(x, y, s, lambda P, R: f'<circle cx="{x + .2 * s:.1f}" cy="{y + .42 * s:.1f}" r="{R(.09)}"/><circle class="mp-dot" cx="{x + .2 * s:.1f}" cy="{y + .42 * s:.1f}" r="{R(.03)}"/>'
+               f'<path class="mp-thin" d="M{P(.14, .35)}L{P(.06, .18)}M{P(.1, .26)}L{P(.02, .26)}M{P(.13, .49)}L{P(.04, .62)}M{P(.21, .33)}L{P(.24, .12)}M{P(.23, .2)}L{P(.32, .14)}"/>'
+               f'<path d="M{P(.29, .45)}C{P(.45, .52)} {P(.6, .6)} {P(.8, .72)}"/>'
+               + ''.join(f'<path d="M{P(u - .045, v - .045)}L{P(u + .045, v + .02)}L{P(u + .065, v - .015)}L{P(u - .025, v - .08)}Z"/>' for u, v in ((.42, .53), (.56, .6), (.7, .7)))
+               + f'<path class="mp-thin" d="M{P(.8, .72)}L{P(.94, .66)}M{P(.8, .72)}L{P(.95, .8)}M{P(.8, .72)}L{P(.88, .9)}"/>')
+def _icon_leaf(x, y, s):  # 叶片：叶缘两条弧、主脉与侧脉、叶柄
+    return ico(x, y, s, lambda P, R: f'<path d="M{P(.2, .82)}C{P(.12, .45)} {P(.45, .12)} {P(.88, .1)}C{P(.86, .52)} {P(.56, .86)} {P(.2, .82)}Z"/>'
+               f'<path class="mp-thin" d="M{P(.08, .94)}L{P(.2, .82)}C{P(.42, .6)} {P(.62, .38)} {P(.86, .13)}'
+               + ''.join(f'M{P(u, v)}L{P(u + du, v + dv)}' for u, v, du, dv in ((.35, .66, -.04, -.2), (.5, .5, -.04, -.22), (.65, .35, -.02, -.18), (.35, .66, .2, .04), (.5, .5, .2, .02), (.65, .35, .16, .02))) + '"/>')
+def _icon_tree(x, y, s):  # 系统树：自下而上分叉，末端是现生的类群（小圆点）
+    seg = [((.5, .92), (.5, .7)), ((.2, .7), (.8, .7)), ((.2, .7), (.2, .44)), ((.8, .7), (.8, .52)), ((.08, .44), (.32, .44)), ((.66, .52), (.94, .52)),
+           ((.08, .44), (.08, .16)), ((.32, .44), (.32, .16)), ((.66, .52), (.66, .16)), ((.94, .52), (.94, .3)), ((.82, .3), (.94, .3)), ((.82, .3), (.82, .16)), ((.94, .3), (.94, .16))]
+    return ico(x, y, s, lambda P, R: '<path d="' + ''.join(f'M{P(*a)}L{P(*b)}' for a, b in seg) + '"/>'
+               + ''.join(f'<circle class="mp-dot" cx="{x + u * s:.1f}" cy="{y + .12 * s:.1f}" r="{R(.035)}"/>' for u in (.08, .32, .66, .82, .94)))
+_ICONS = [_icon_cell, _icon_helix, _icon_punnett, _icon_neuron, _icon_leaf, _icon_tree]
+_MC = [dict(name=name, ja=ja, short=sh, icon=_ICONS[k],
+            topics=[dict(slug=s, zh=_BY[s]['zh'], ja=_BY[s]['ja'], num=f'{_BY[s]["n"]:02d}', label=MAPL.get(s, _BY[s]['zh']), f=MAPF[s], href=f'topics/{s}/') for s in slugs])
+       for k, (name, ja, sh, _, slugs) in enumerate(CHAPTERS)]
+MAPSVG, MAPLEGEND, MAPSTAT = render(dict(subject='生物', cap_ja='図　生物の体系', chapters=_MC, xlinks=XLINKS, start=150, MINSEC=1.8,
+    W=1240, H=1300, CX=620, CY=630, R0=58, R1=208, R2=348, NR=46, IS=58, FN=17, FF=16, FSUB=11, FL=15, BH=58, GAP=11, FCH=21))
+print('map:', MAPSTAT)
+RANKTBL=''.join(f'<tr><td><a href="topics/{t["slug"]}/">{t["n"]} {t["zh"]}</a></td><td>{" ".join(t["bank"]["codes"])}</td><td class="num">{t["bank"]["n"]}</td><td class="stars">{t["bank"]["stars"]}</td></tr>' for t in sorted([t for t in TOPICS if t.get('bank')],key=lambda t:-t['bank']['n']))
+_np = sum(len(t['problems']) for t in TOPICS); _nb = sum(t['bank']['n'] for t in TOPICS if t.get('bank')); _nt = sum(1 for t in TOPICS if t['problems'])
+_SITES = [('https://feather0000.github.io/eju-calculus/', 'EJU 数学コース2 网站'), ('https://feather0000.github.io/eju-physics/', 'EJU 理科 物理 网站'), ('https://feather0000.github.io/eju-chemistry/', 'EJU 理科 化学 网站')]
+PREFACE = ('这是按 EJU 理科（生物）大纲整理的中文讲义，十二个专题合为六章：细胞与代谢、遗传信息、生殖与遗传、动物的反应与体内环境、植物的环境应答、生态与进化。'
+           '建议先按章节读讲解和例题，再做练习；遗传比例、浓缩率等计算题用到的公式可以随时在附录里查。各页开头的出题频度来自 2005–2025 年试卷的统计，拿不准先看哪一章时可以参考它，也可以直接看本页最后的频度表。')
 open('index.html','w').write(f'''<!doctype html><html lang="zh-Hans" data-site="{SITE}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark">
-{HEADJS}<title>EJU 理科 生物 全专题讲解</title>{headmeta(SITE_NAME + " 全专题讲解", SITE_DESC, "", "")}
-<link rel="stylesheet" href="assets/site.css"></head><body class="home"><main>
-<div class="home-top"><p class="eyebrow">EJU 理科 · 生物</p><button class="chip theme-btn" id="theme" type="button">深色</button></div>
-<h1>EJU 理科 生物 全专题讲解</h1><p>按 JASSO《日本留学試験 理科シラバス（生物）》编排：细胞・代谢・遗传・发生・调节・免疫・植物・生态・进化。每页含要点讲解（中文 + 日语术语）、关键公式、原创例题（含遗传比例/计算题）和带解答的 EJU 风格选择题。</p>
-<p class="home-links"><a href="topics/demos/">🎛️ 互动演示总览（{next(t["demo_count"] for t in TOPICS if t["slug"]=="demos")} 个）</a><a href="topics/tips/">⚡ 快速解题技巧</a></p><ol>{lis}</ol><h2>过去问出题频度排行</h2><p>依据 2005–2025 年 38 份 EJU 试卷的按知识点分类原题册统计（各页开头有详细的「出题频度」表）。</p><div class="tw"><table><tr><th>专题页</th><th>原题册专题</th><th style="text-align:right">题数</th><th>重要度</th></tr>{RANKTBL}</table></div><p><a href="https://feather0000.github.io/eju-calculus/">→ EJU 数学コース2 网站</a>　<a href="https://feather0000.github.io/eju-physics/">→ EJU 理科 物理 网站</a>　<a href="https://feather0000.github.io/eju-chemistry/">→ EJU 理科 化学 网站</a></p></main>
-{TOGGLEJS}<script src="assets/nav.js"></script></body></html>''')
+{HEADJS}
+<title>EJU 理科 生物 全专题讲解</title>{headmeta(SITE_NAME + " 全专题讲解", SITE_DESC, "", "")}
+<link rel="stylesheet" href="assets/site.css"></head><body class="home contents">
+<a class="skip" href="#chapters">跳到目次</a>
+<div class="ct-wrap">
+<header class="ct-head">
+<div class="ct-top"><p class="ct-kicker">EJU 理科 · 生物</p><button class="chip theme-btn" id="theme" type="button">深色</button></div>
+<h1>生物<br>全专题讲解</h1>
+<div class="ct-preface"><p>{PREFACE}</p>
+<p class="ct-facts">共 {_nt} 个讲解专题、{_np} 道原创练习题、{_D["demo_count"]} 个互动演示；过去问 {_nb} 题已按专题归类。</p></div>
+</header>
+<main id="main">
+<section id="chapters" aria-labelledby="h-chapters"><h2 id="h-chapters" class="ct-label">目次<span lang="ja">もくじ</span></h2>
+<ol class="ct-parts">{"".join(_parts)}</ol></section>
+<section id="map" aria-labelledby="h-map"><div class="ct-part"><p class="ct-no ct-no-a" aria-hidden="true">图</p><div class="ct-body">
+<h2 id="h-map">知识导图<span class="ct-chja" lang="ja">知識マップ</span></h2>
+<p class="ct-intro">中心「生物」分出六章，每章一色，外圈是各章的讲解专题和一条代表式；虚线弧标出专题之间的重要联系。点节点即可进入对应页。</p></div>
+<figure class="mp"><p class="mp-hint" id="mp-hint">图较宽，可左右滑动查看。</p>
+<div class="mp-scroll" role="region" aria-label="知识导图" aria-describedby="mp-hint">{MAPSVG}</div>
+<figcaption id="mp-cap">生物知识导图：中心「生物」分出六章，各章外圈列讲解专题与代表式。虚线弧所示的联系：<ul class="mp-legend">{MAPLEGEND}</ul></figcaption></figure></div></section>
+<section id="appendix" aria-labelledby="h-appendix"><div class="ct-part"><p class="ct-no ct-no-a" aria-hidden="true">附</p><div class="ct-body">
+<h2 id="h-appendix">资料・速查・工具<span class="ct-chja" lang="ja">資料・ツール</span></h2>
+<p class="ct-intro">考前查典型数值、对公式与术语、找易错点；站内搜索覆盖题目、讲解、公式、术语与数据。</p>
+<ol class="ct-list">{_appx}</ol></div></div></section>
+<section id="ranking" aria-labelledby="h-rank"><div class="ct-part"><p class="ct-no ct-no-a" aria-hidden="true">表</p><div class="ct-body">
+<h2 id="h-rank">过去问出题频度<span class="ct-chja" lang="ja">出題頻度</span></h2>
+<p class="ct-intro">依据 2005–2025 年 38 份 EJU 试卷的按知识点分类原题册统计，按题数从多到少排列（各页开头另有详细的「出题频度」表）。</p>
+<div class="tw"><table><thead><tr><th scope="col">专题页</th><th scope="col">原题册专题</th><th scope="col" class="num">题数</th><th scope="col">重要度</th></tr></thead><tbody>{RANKTBL}</tbody></table></div></div></div></section>
+</main>
+<footer class="ct-foot"><p class="ct-sites">姊妹站：{"".join(f'<a href="{u}">{a}</a>' for u, a in _SITES)}</p><p>原创讲义与题目，非 JASSO 官方内容。按《日本留学試験 理科シラバス（生物）》编排。</p></footer>
+</div>
+{TOGGLEJS}<script src="assets/map.js"></script><script src="assets/nav.js"></script></body></html>''')
 # 404：GitHub Pages 对任意深度的不存在路径都返回它，所以资源用站点绝对路径
 open('404.html','w').write(f'''<!doctype html><html lang="zh-Hans" data-site="{SITE}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="light dark">
 {HEADJS}<title>页面不存在 · {SITE_NAME}</title><meta name="robots" content="noindex"><link rel="icon" href="{SITE_PATH}assets/favicon.svg" type="image/svg+xml"><link rel="icon" href="{SITE_PATH}assets/favicon-32.png" sizes="32x32" type="image/png"><link rel="apple-touch-icon" href="{SITE_PATH}assets/apple-touch-icon.png">
