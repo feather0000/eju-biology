@@ -2,11 +2,11 @@ import importlib.util, glob, os, json, html, sys
 sys.path.insert(0,"content")
 open('assets/demos.js','w').write(''.join(open(f).read() for f in ['assets/bio.js']+sorted(glob.glob('demos_src/*.js'))))
 DEMOS={
-'homeostasis':[('hb','氧解离曲线与玻尔效应','酸素解離曲線とボーア効果','调组织的 pH、温度和氧分压，看曲线右移与组织中放出的 O₂。')],
-'evolution':[('hw','哈迪–温伯格平衡与自然选择','ハーディ・ワインベルグの法則','由等位基因频率得到基因型频率；加入对 aa 的选择，看 q 逐代变化。')],
-'genetics':[('punnett','两对基因的杂交（独立／连锁）','2組の対立遺伝子の交配','选择亲本基因型，看配子、棋盘格与子代表型比；连锁时可调组换价。')],
-'metabolism':[('enzyme','酶反应速度','酵素反応の速度','底物浓度、酶量、竞争性／非竞争性抑制剂，以及温度和 pH 的影响（示意）。')],
-'nerve':[('memb','静息电位与离子浓度','静止電位','改变细胞外 K⁺、Na⁺ 浓度和 Na⁺ 通透性，看能斯特电位与膜电位。')],
+'homeostasis':[('hb','氧解离曲线与玻尔效应','酸素解離曲線とボーア効果','调组织的 pH、温度和氧分压，看曲线右移与组织中放出的 O₂。可直接拖曲线上的组织点和 P₅₀ 点；右侧红细胞的颜色随氧合程度变化。')],
+'evolution':[('hw','哈迪–温伯格平衡与自然选择','ハーディ・ワインベルグの法則','由等位基因频率得到基因型频率；加入对 aa 的选择，看 q 逐代变化。可拖基因库条的分界改 p，拖 q 曲线的起点和终点。')],
+'genetics':[('punnett','两对基因的杂交（独立／连锁）','2組の対立遺伝子の交配','选择亲本基因型，看配子、棋盘格与子代表型比；连锁时可调组换价。可把等位基因拖进亲本细胞，点按切换显隐性。')],
+'metabolism':[('enzyme','酶反应速度','酵素反応の速度','底物浓度、酶量、竞争性／非竞争性抑制剂，以及温度和 pH 的影响（示意）。可拖曲线上的点改 [S]、温度和 pH，反应液中可看到酶与底物结合。')],
+'nerve':[('memb','静息电位与离子浓度','静止電位','改变细胞外 K⁺、Na⁺ 浓度和 Na⁺ 通透性，看能斯特电位与膜电位。可上下拖电位线或 Na⁺ 通道，看离子穿过细胞膜。')],
 }
 def demosec(t):
     ds=DEMOS.get(t['slug'],[])
@@ -48,7 +48,7 @@ def page(t):
     TE=f'''<section id="terms"><h2>术语对照</h2><p class="jp-sub">用語</p><div class="tw"><table><tr><th>中文</th><th>日本語</th><th>读法</th></tr>{terms}</table></div></section>''' if t['terms'] else ''
     return f'''<!DOCTYPE html><html lang="zh-CN"><head><link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>EJU 理科 生物 · {t["n"]} {t["zh"]}</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
-<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script><script defer src="../../assets/lazy-katex.js"></script><script defer src="../../assets/demos.js?v=1"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script><script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script><script defer src="../../assets/lazy-katex.js"></script><script defer src="../../assets/demos.js?v=2"></script>
 <link rel="stylesheet" href="../../assets/site.css"><script>try{{var t=localStorage.getItem('eju-theme')||(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');document.documentElement.setAttribute('data-theme',t)}}catch(e){{}}</script></head><body>
 <a class="skip" href="#main">跳到正文</a><div id="cdn-note" hidden>公式库（KaTeX）未能加载，公式将显示为源码。请联网后刷新页面。</div>
 <header class="hero"><div class="hero-in"><div class="hero-text"><p class="back"><a href="../../">← 目录</a></p><p class="eyebrow">EJU 理科 生物 · {t["area"]} · {t["ja"]}</p><h1>{t["n"]} {t["zh"]}</h1><p class="lead">{t["lead"]}</p></div><div class="hero-formula" aria-hidden="true">{hero}</div></div></header>
